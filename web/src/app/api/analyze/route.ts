@@ -96,8 +96,29 @@ Respond with JSON only, in this shape:
     });
 
     if (!response.ok) {
+      // Surface the upstream reason. A bare "429" is ambiguous between a rate limit and
+      // an exhausted quota, and that difference decides whether waiting helps.
+      let detail = "";
+      let code = "";
+      try {
+        const err = await response.json();
+        detail = err?.error?.message ?? "";
+        code = err?.error?.code ?? err?.error?.type ?? "";
+      } catch {
+        detail = await response.text().catch(() => "");
+      }
+
+      const friendly =
+        code === "insufficient_quota"
+          ? "The OpenAI account has no remaining quota — add credit or use a different key."
+          : response.status === 401
+            ? "OPENAI_API_KEY was rejected. Check the key in the Vercel project settings."
+            : response.status === 429
+              ? "OpenAI rate limit or quota reached. If this persists, check billing rather than retrying."
+              : `OpenAI returned ${response.status}.`;
+
       return NextResponse.json(
-        { error: `OpenAI API error: ${response.status}` },
+        { error: detail ? `${friendly} (${detail})` : friendly },
         { status: 502 }
       );
     }
