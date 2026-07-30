@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Job Recommendation Demo",
+  title: "Tech Job Recommendations — Baseline vs Enhanced",
   description:
-    "Compare baseline vs enhanced content-based job recommendation models",
+    "Two content-based recommenders compared side by side over 1,000 tech jobs from 112 US and Canadian companies.",
 };
 
 export default function RootLayout({
@@ -31,7 +32,7 @@ export default function RootLayout({
         <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
-              <a href="/" className="flex items-center gap-3">
+              <Link href="/" className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
                   <svg
                     className="w-5 h-5 text-white"
@@ -49,13 +50,13 @@ export default function RootLayout({
                 </div>
                 <div>
                   <h1 className="text-lg font-bold text-gray-900">
-                    Job Recommendation Demo
+                    Tech Job Recommendations
                   </h1>
                   <p className="text-xs text-gray-500 -mt-0.5">
-                    Content-Based Filtering with TF-IDF
+                    Content-based filtering: title-only vs seven weighted features
                   </p>
                 </div>
-              </a>
+              </Link>
               <div className="hidden sm:flex items-center gap-4 text-sm text-gray-500">
                 <span className="flex items-center gap-1.5">
                   <span className="w-3 h-3 rounded-full bg-blue-500" />

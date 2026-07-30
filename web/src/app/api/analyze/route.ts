@@ -8,6 +8,7 @@ interface JobSummary {
   category: string;
   jobType: string;
   experience: string;
+  workplace: string;
 }
 
 interface AnalyzeRequest {
@@ -16,11 +17,24 @@ interface AnalyzeRequest {
   enhancedRecs: JobSummary[];
 }
 
+function render(recs: JobSummary[]): string {
+  return recs
+    .map(
+      (r, i) =>
+        `${i + 1}. ${r.title} — ${r.company} (${r.city}, ${r.country}) ` +
+        `[${r.category}; ${r.experience}; ${r.workplace}; ${r.jobType}]`
+    )
+    .join("\n");
+}
+
 export async function POST(request: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      { error: "OPENAI_API_KEY not configured" },
+      {
+        error:
+          "OPENAI_API_KEY is not configured. Add it in the Vercel project settings (or web/.env.local) to enable the blind LLM judge.",
+      },
       { status: 500 }
     );
   }
@@ -28,28 +42,42 @@ export async function POST(request: NextRequest) {
   const body: AnalyzeRequest = await request.json();
   const { sourceJob, baselineRecs, enhancedRecs } = body;
 
-  const prompt = `You are an expert in job recommendation systems. A user is currently viewing a job listing and two recommendation models are suggesting similar jobs. Analyze which model provides better recommendations for the user.
+  if (!sourceJob || !baselineRecs?.length || !enhancedRecs?.length) {
+    return NextResponse.json({ error: "Malformed request body." }, { status: 400 });
+  }
 
-## Source Job (the job the user is viewing)
+  // Blind A/B: the judge is never told which list came from which model, and which list
+  // appears first is randomised per request. Labelling one of them "Enhanced" in the
+  // prompt would do the judging for us and the verdict would prove nothing.
+  const enhancedFirst = Math.random() < 0.5;
+  const listOne = enhancedFirst ? enhancedRecs : baselineRecs;
+  const listTwo = enhancedFirst ? baselineRecs : enhancedRecs;
+
+  const prompt = `You are evaluating two candidate "similar jobs" lists for a job board. A candidate is currently viewing the job below. Two different recommender systems each produced three suggestions. You are told nothing about how either system works.
+
+## The job being viewed
 - Title: ${sourceJob.title}
 - Company: ${sourceJob.company}
 - Location: ${sourceJob.city}, ${sourceJob.country}
-- Category: ${sourceJob.category}
-- Type: ${sourceJob.jobType}
-- Experience: ${sourceJob.experience}
+- Job family: ${sourceJob.category}
+- Seniority: ${sourceJob.experience}
+- Workplace: ${sourceJob.workplace}
+- Employment type: ${sourceJob.jobType}
 
-## Baseline Model Recommendations (uses only job title similarity)
-${baselineRecs.map((r, i) => `${i + 1}. ${r.title} at ${r.company} (${r.city}, ${r.country}) [${r.category}, ${r.jobType}, ${r.experience}]`).join("\n")}
+## List 1
+${render(listOne)}
 
-## Enhanced Model Recommendations (uses description + title + category + location + job type + experience)
-${enhancedRecs.map((r, i) => `${i + 1}. ${r.title} at ${r.company} (${r.city}, ${r.country}) [${r.category}, ${r.jobType}, ${r.experience}]`).join("\n")}
+## List 2
+${render(listTwo)}
 
-Provide a concise analysis (3-5 sentences) covering:
-1. Which model produced more relevant recommendations for this specific job and why
-2. Any notable strengths or weaknesses you see in each model's picks
-3. Your verdict: which model wins for user experience
+Judge which list is more useful to this specific candidate. Weigh:
+- role relevance — would someone interested in the viewed job plausibly want these?
+- seniority fit — an intern should not be shown Director roles, and vice versa
+- workplace compatibility — a remote candidate cannot take an on-site role in another city
+- usefulness of the set as a whole — three near-identical titles add little, and neither do three roles at one employer
 
-Be specific — reference the actual job titles and explain your reasoning. Format your verdict clearly at the end as "Verdict: [Baseline/Enhanced] model wins" with a one-line reason.`;
+Respond with JSON only, in this shape:
+{"winner": "List 1" | "List 2" | "tie", "reasoning": "3-4 sentences citing specific job titles from the lists and explaining the decisive differences. Refer to the lists only as List 1 and List 2."}`;
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -61,13 +89,13 @@ Be specific — reference the actual job titles and explain your reasoning. Form
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.3,
-        max_tokens: 400,
+        temperature: 0.2,
+        max_tokens: 500,
+        response_format: { type: "json_object" },
       }),
     });
 
     if (!response.ok) {
-      const error = await response.text();
       return NextResponse.json(
         { error: `OpenAI API error: ${response.status}` },
         { status: 502 }
@@ -75,13 +103,30 @@ Be specific — reference the actual job titles and explain your reasoning. Form
     }
 
     const data = await response.json();
-    const analysis = data.choices?.[0]?.message?.content || "No analysis generated.";
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      return NextResponse.json({ error: "Empty response from the judge." }, { status: 502 });
+    }
 
-    return NextResponse.json({ analysis });
-  } catch (err) {
-    return NextResponse.json(
-      { error: "Failed to connect to OpenAI API" },
-      { status: 502 }
-    );
+    let parsed: { winner?: string; reasoning?: string };
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return NextResponse.json({ error: "Judge returned malformed JSON." }, { status: 502 });
+    }
+
+    // Map the blind label back to the model that actually produced that list.
+    let winner: "baseline" | "enhanced" | "tie" = "tie";
+    if (parsed.winner === "List 1") winner = enhancedFirst ? "enhanced" : "baseline";
+    else if (parsed.winner === "List 2") winner = enhancedFirst ? "baseline" : "enhanced";
+
+    return NextResponse.json({
+      winner,
+      reasoning: parsed.reasoning ?? "No reasoning returned.",
+      // Which model happened to be shown first, so the UI can show the blinding was real.
+      shownFirst: enhancedFirst ? "enhanced" : "baseline",
+    });
+  } catch {
+    return NextResponse.json({ error: "Failed to reach the OpenAI API." }, { status: 502 });
   }
 }
