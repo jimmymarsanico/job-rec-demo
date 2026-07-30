@@ -31,6 +31,9 @@ Thumbs.db
 .env.local
 .env*.local
 
+# Claude files
+.claude/
+
 # IDE
 .vscode/
 .idea/
